@@ -9,6 +9,7 @@ import multiprocessing
 from Queue import Queue
 import os
 import time
+import sys
 
 """
 Duplicate Users Rule :
@@ -33,13 +34,19 @@ LABEL_SIMILAR = 1
 
 MIN_MATCH_LEVEL = 3
 BASE_PATH = os.path.abspath(".")
-SLEEP_TIME = 8*60 # second
+SLEEP_NUM = 8
+SLEEP_TIME = 60 # second
 
 sUSER = "xxxx"
 sPASS = "xxxx"
 sHOST = "xxxx"
 sDBNAME = "xxxx"
 sPORT = 3306
+
+def traceback(err):
+    now = time.strftime('%H:%M:%S', time.localtime(time.time()))
+    traceback = sys.exc_info()[2]
+    print now, err, 'exception in line', traceback.tb_lineno
 
 def getIpMatching(input_userid):
     input_userid = str(input_userid)
@@ -79,7 +86,6 @@ def get_duplicated_account(cResults, id_results, userResults, scores, userid_dev
     cRefs = set(userid_ref_table[cId].strip().split(","))
 
     totalrates = {}
-
     for dResult in userResults:
         sRegIp = ""
         sDevice = ""
@@ -195,12 +201,11 @@ def get_duplicated_account(cResults, id_results, userResults, scores, userid_dev
             totalrates.__setitem__(dUserName, sInfo)
 
     sortRates = sorted(totalrates.items(), lambda x, y: cmp(int(x[1].split(",")[0]), int(y[1].split(",")[0])), reverse=True)
-    db = DBConn(sHOST, sPORT, sUSER, sPASS, sDBNAME)
+    db = DBConn(sHOST, PORT, sUSER, sPASS, sDBNAME)
     db.dbConnect()
 
     state = "DELETE FROM duplicate_account_info WHERE userName='{}'".format(cUserName)
     db.exeDelete(state)
-
     data = ""
     for item in sortRates[:20]:
         data += u'("'+cUserName+u'","'+item[0]+u'","'+item[1].split(",")[1]+u'","'+item[1].split(",")[2]+u'","'+item[1].split(",")[3]+u'","'+ \
@@ -213,6 +218,7 @@ def get_duplicated_account(cResults, id_results, userResults, scores, userid_dev
             u"dup_TranMain2SubIp, dup_TranSub2MainIp, dup_realName, dup_passwd, dup_email, dup_mobile, dup_address, " \
             u"dup_city, dup_country, dup_cookie, dup_referrer, dup_device, total_rate) VALUES {}".format(data)
     db.exeInsert(state)
+    db.dbClose()
 
 def sort_data(result):
     userid = str(result[0])
@@ -250,10 +256,11 @@ def sort_data(result):
     else:
         idip_type_table.__setitem__(userid+'-'+ip, iptype)
 
-		
 if __name__=="__main__":
+    cpus = multiprocessing.cpu_count()
+    print "Env : "+str(cpus)+" cpus"
     if os.path.exists(BASE_PATH + "/userid_ip_table.txt"):
-        print "get 'http_request' history data ..."
+        print "Init from file - get 'http_request' history data ..."
         all_results = []
         with open(BASE_PATH + "/userid_ip_table.txt", "r") as f:
             for line in f.readlines():
@@ -268,7 +275,7 @@ if __name__=="__main__":
                 all_results.append(tmp)
             f.close
 
-        print "build userid => ip, ip => userid table..."
+        print "Init from file - build userid => ip, ip => userid table..."
         userid_ip_table = {}
         with open(BASE_PATH + "/userid_table.txt","r") as f:
             for line in f.readlines():
@@ -300,7 +307,7 @@ if __name__=="__main__":
             f.close
     else:
         # 從資料庫重新抓取所有數據
-        print "get 'http_request' history data ..."
+        print "Init from db - get 'http_request' history data ..."
         sDB = DBConn(sHOST, sPORT, sUSER, sPASS, sDBNAME)
         sDB.dbConnect()
         state = "SELECT  p1.playerid, p1.ip, p1.createdat, IFNULL(p1.device,''), IFNULL(p1.referrer,''), p1.type " \
@@ -308,7 +315,7 @@ if __name__=="__main__":
         all_results = list(sDB.exeQuery(state))
         sDB.dbClose()
 
-        print "build userid => ip, ip => userid table..."
+        print "Init from db - build userid => ip, ip => userid table..."
         userid_ip_table = {}
         userid_device_table = {}
         userid_ref_table = {}
@@ -317,7 +324,7 @@ if __name__=="__main__":
         for result in all_results:
             sort_data(result)
 
-    print "get 'duplicate_account' rates..."
+    print "Init from db - get 'duplicate_account_setting' rates..."
     sDB = DBConn(sHOST, sPORT, sUSER, sPASS, sDBNAME)
     sDB.dbConnect()
     state = "SELECT rate_exact, rate_similar, status " \
@@ -332,42 +339,41 @@ if __name__=="__main__":
     #     scores.append((x + 1, y + 1, status))
 
     queue = Queue()
-    cpus = multiprocessing.cpu_count()
     time_end = all_results[len(all_results)-1][2]
     # time_end = datetime.datetime.now()-datetime.timedelta(minutes=10)
     while True:
         try:
-            print "========== program start... =========="
+            print "========== Program start... =========="
             time_start = time_end
             sDB = DBConn(sHOST, sPORT, sUSER, sPASS, sDBNAME)
             sDB.dbConnect()
 
             t1 = datetime.datetime.now()
-            print "get 'http_request' data - from "+time_start.strftime("%Y-%m-%d %H:%M:%S")+" to now..."
+            print "Get 'http_request' data - from "+time_start.strftime("%Y-%m-%d %H:%M:%S")+" to "+\
+                  t1.strftime("%Y-%m-%d %H:%M:%S")+"..."
             state = "SELECT  p1.playerid, p1.ip, p1.createdat, IFNULL(p1.device,''), IFNULL(p1.referrer,''), p1.type " \
                     "FROM http_request p1 " \
                     "WHERE createdat >= '{}'".format(time_start.strftime("%Y-%m-%d %H:%M:%S"))
             new_list = list(sDB.exeQuery(state))
-            print len(new_list)
+            print "Find " + str(len(new_list)) + " records"
             new_userid_list = [item[0] for item in new_list]
             time_end = datetime.datetime.now()
             all_results.extend(new_list)
 
-            print "build new userid => ip, ip => userid table..."
-            for result in new_list:
-                sort_data(result)
-
-            print "query users data..."
+            print "Query users data ..."
             state = "SELECT  p1.username, p1.password, concat(IFNULL(p2.firstname,''),IFNULL(p2.lastname,'')) 'RealName', " \
                     "IFNULL(p2.phone,''), IFNULL(p1.email,''), IFNULL(p2.city,''), IFNULL(p2.country,''), IFNULL(p2.address,''), " \
                     "IFNULL(p2.registrationIP,''), p1.playerId " \
                     "FROM player p1 JOIN playerdetails p2 ON p1.playerid=p2.playerid ;"
             userResults = sDB.exeQuery(state)
             sDB.dbClose()
-            t2 = datetime.datetime.now()
-            print str(t2-t1)
 
-            print "calculate duplicate users rate..."
+            t2 = datetime.datetime.now()
+            print "Build new userid => ip, ip => userid table ("+str(t2-t1)+") ..."
+            for result in new_list:
+                sort_data(result)
+
+            print "Start to calculate duplicate users rate ..."
             for cResult in userResults:
                 if cResult[9] in new_userid_list:
                     queue.put(cResult)
@@ -375,18 +381,15 @@ if __name__=="__main__":
             with ProcessPoolExecutor(max_workers=cpus) as executor:
                 while not queue.empty():
                     cResults = queue.get()
+                    queue.task_done()
+                    # print queue.unfinished_tasks
                     cId = cResults[9]
                     id_results = getIpMatching(cId)
                     executor.submit(get_duplicated_account, cResults, id_results, userResults, scores,
                                     userid_device_table, userid_ref_table, userid_ip_table, idip_type_table)
-
             t3 = datetime.datetime.now()
-            print str(t3 - t2)
+            print "End to calculate duplicate users rate ("+str(t3-t2)+")..."
 
-        except MySQLdb.Error as e:
-            print "Error %d: %s" % (e.args[0], e.args[1])
-        finally:
-            print "saving data..."
             with open(BASE_PATH + "/userid_ip_table.txt","w") as f:
                 item = all_results[len(all_results)-1]
                 f.writelines(str(item[0])+","+item[1]+","+item[2].strftime("%Y-%m-%d %H:%M:%S")+","+item[3]+","+item[4]+","+str(item[5])+"\n")
@@ -411,5 +414,12 @@ if __name__=="__main__":
                 for item in idip_type_table.iteritems():
                     f.writelines(item[0]+" : "+item[1]+"\n")
                 f.close
-            print "========== program sleeping... =========="
-            time.sleep(SLEEP_TIME)
+        except MySQLdb.Error as e:
+            print "Error %d: %s" % (e.args[0], e.args[1])
+        except Exception, err:
+            traceback(err)
+        finally:
+            print "========== Program sleeping... =========="
+            for i in range(SLEEP_NUM):
+                print str(i+1) + " min"
+                time.sleep(SLEEP_TIME)
